@@ -1,0 +1,13 @@
+//----- Delete Schema -----//
+
+Delete(Class("warehouses"));
+Delete(Class("products"));
+Delete(Class("customers"));
+Delete(Class("orders"));
+
+Delete(Index("all_warehouses"));
+Delete(Index("all_products"));
+Delete(Index("all_customers"));
+Delete(Index("all_orders"));
+
+Delete(Function("submit_order"));

@@ -1,0 +1,419 @@
+//----- Create Schema -----//
+
+CreateClass({name: "warehouses"});
+CreateClass({name: "products"});
+CreateClass({name: "customers"});
+CreateClass({name: "orders"});
+
+CreateIndex({"name": "all_warehouses", "source": Class("warehouses")});
+CreateIndex({"name": "all_products", "source": Class("products")});
+CreateIndex({"name": "all_customers", "source": Class("customers")});
+CreateIndex({"name": "all_orders", "source": Class("orders")});
+
+CreateFunction(
+  {
+    "name": "submit_order",
+    "body": Query(
+      Lambda(["customerId", "products"],
+        // 1- Get Customer and Products
+        // The first step is to make sure instances exist within the
+        // database for the given parameters. Therefore, we try to get
+        // the Customer and all of the Products for the given Ids. If
+        // they exist, we bind them to variables using the Let function
+        // in order to make them available within the scope of the
+        // function.
+        Let(
+          {
+            "customer": Get(Ref(Class("customers"), Var("customerId"))),
+            "products":
+              Map(
+                Var("products"),
+                Lambda("requestedProduct",
+                  Let(
+                    {
+                      "product": Get(Ref(
+                        Class("products"),
+                        Select(
+                          "productId",
+                          Var("requestedProduct")
+                        )
+                      ))
+                    },
+                    // Build up a new temporal product object containing
+                    // the data given as parameter together with the
+                    // data retrieved from the database.
+                    {
+                      "ref": Select("ref", Var("product")),
+                      "price": Select(["data", "price"], Var("product")),
+                      "currentQuantity": Select(
+                        ["data", "quantity"],
+                        Var("product")
+                      ),
+                      "requestedQuantity": Select(
+                        ["quantity"],
+                        Var("requestedProduct")
+                      ),
+                      "backorderLimit": Select(
+                        ["data", "backorderLimit"],
+                        Var("product")
+                      )
+                    }
+                  )
+                )
+              )
+          },
+          Do(
+            // 2- Check if there's enough stock
+            // Next, we need to verify if there is enough stock for the
+            // requested products. To do so, we evaluate all of the
+            // requested products and compare their requested quantity
+            // value against the current quantity value. When there is
+            // not enough stock for any of the products, we print a
+            // message and cancel the whole transaction with the Abort
+            // function.
+            Foreach(Var("products"),
+              Lambda("product",
+                If(
+                  LTE(
+                    Select("requestedQuantity", Var("product")),
+                    Select("currentQuantity", Var("product"))
+                  ),
+                  Var("product"),
+                  Abort(Concat([
+                    "Stock quantity for Product [",
+                    Select(["ref", "id"], Var("product")),
+                    "] not enough – requested at [",
+                    ToString(Time("now")),
+                    "]"
+                  ]))
+                )
+              )
+            ),
+            // 3- Update products stock
+            // Then, we need to update the product stock quantity
+            // accordingly. To do this, we update each product instance
+            // through the Update function subtracting the requested
+            // quantity from its current quantity.
+            Foreach(Var("products"),
+              Lambda("product",
+                Update(
+                  Select("ref", Var("product")), {
+                    data: {
+                      "quantity": Subtract(
+                        Select("currentQuantity", Var("product")),
+                        Select("requestedQuantity", Var("product"))
+                      )
+                    }
+                  }
+                )
+              )
+            ),
+            // 4- Update backordered status
+            // Moving forward, we verify if the backordered status needs
+            // to be updated. For that, we check if the updated stock
+            // quantity is lower than the backorderLimit threshold and
+            // set the backordered flag to true if so.
+            Foreach(Var("products"),
+              Lambda("product",
+                If(
+                  LTE(
+                    Subtract(
+                      Select("currentQuantity", Var("product")),
+                      Select("requestedQuantity", Var("product"))
+                    ),
+                    Select("backorderLimit", Var("product"))
+                  ),
+                  Update(
+                    Select("ref", Var("product")), {
+                      data: {
+                        "backordered": true
+                      }
+                    }
+                  ),
+                  Var("product")
+                )
+              )
+            ),
+            // 5- Create Order
+            // Last, we create a new Order instance with the provided
+            // and retrieved data. As this is the last query to be
+            // executed, the function will output the newly created
+            // Order as result.
+            Let(
+              {
+                "productsLine":
+                  // Build up the Order products line object from the
+                  // products variable.
+                  Map(
+                    Var("products"),
+                    Lambda("product",
+                      {
+                        "product": Select("ref", Var("product")),
+                        "quantity": Select(
+                          "requestedQuantity", Var("product")
+                        ),
+                        "price": Select("price", Var("product"))
+                      }
+                    )
+                  )
+              },
+              Create(
+                Class("orders"), {
+                  data: {
+                    "customer": Select("ref", Var("customer")),
+                    "line": Var("productsLine"),
+                    "status": "processing",
+                    "creationDate": Time("now"),
+                    "shipDate": null,
+                    "shipAddress": Select(
+                      ["data", "address"],
+                      Var("customer")
+                    ),
+                    "creditCard": Select(
+                      ["data", "creditCard"],
+                      Var("customer")
+                    )
+                  }
+                }
+              )
+            )
+          )
+        )
+      )
+    )
+  }
+);
+
+//----- Insert Data -----//
+Let(
+  {
+    "warehouse1":
+      Create(
+        Class("warehouses"), {
+          data: {
+            "name": "East",
+            "address": {
+              "street": "13 Pierstorff Drive",
+              "city": "Washington",
+              "state": "DC",
+              "zipCode": "20220"
+            }
+          }
+        }
+      ),
+    "warehouse2":
+      Create(
+        Class("warehouses"), {
+          data: {
+            "name": "Central",
+            "address": {
+              "street": "7529 Melrose Circle",
+              "city": "Dallas",
+              "zipCode": "75205",
+              "state": "TX"
+            }
+          }
+        }
+      ),
+    "warehouse3":
+      Create(
+        Class("warehouses"), {
+          data: {
+            "name": "Central",
+            "address": {
+              "street":"4 Elka Drive",
+              "city": "Tacoma",
+              "zipCode": "98424",
+              "state":"WA"
+            },
+          }
+        }
+      )
+  },
+  Let(
+    {
+    "product1":
+      Create(
+        Class("products"), {
+          data: {
+            "name": "Cup",
+            "description": "Translucent 9 Oz",
+            "price": 6.90,
+            "quantity": 100,
+            "warehouse": Select("ref", Var("warehouse2")),
+            "backorderLimit": 5,
+            "backordered": false
+          }
+        }
+      ),
+    "product2":
+      Create(
+        Class("products"), {
+          data: {
+            "name": "Beef Cheek",
+            "description": "Fresh",
+            "price": 5.28,
+            "quantity": 100,
+            "warehouse": Select("ref", Var("warehouse3")),
+            "backorderLimit": 10,
+            "backordered": false
+          }
+        }
+      ),
+    "product3":
+      Create(
+        Class("products"), {
+          data: {
+            "name": "Pizza",
+            "description": "Frozen Cheese",
+            "price": 4.07,
+            "quantity": 100,
+            "warehouse": Select("ref", Var("warehouse1")),
+            "backorderLimit": 15,
+            "backordered": false
+          }
+        }
+      )
+  },
+  Let(
+    {
+      "customer1":
+        Create(
+          Class("customers"), {
+            data: {
+              "firstName": "Auria",
+              "lastName": "Osgardby",
+              "address": {
+                "street": "87856 Mendota Court",
+                "city": "Idaho Falls",
+                "state": "ID",
+                "zipCode": "83405"
+              },
+              "telephone": "208-346-0715",
+              "creditCard": {
+                "network": "Visa",
+                "number": "4556781272473393"
+              }
+            }
+          }
+        ),
+      "customer2":
+        Create(
+          Class("customers"), {
+            data: {
+              "firstName": "Skipper",
+              "lastName": "Scanes",
+              "address": {
+                "street": "72 Waxwing Terrace",
+                "city": "Colorado Springs",
+                "state": "CO",
+                "zipCode": "80925"
+              },
+              "telephone": "719-872-8799",
+              "creditCard": {
+                "network": "Visa",
+                "number": "4916112310613672"
+              }
+            }
+          }
+        ),
+      "customer3":
+        Create(
+          Class("customers"), {
+            data: {
+              "firstName": "Ardith",
+              "lastName": "Probert",
+              "address": {
+                "street": "5 Troy Trail",
+                "city": "Fairbanks",
+                "state": "AK",
+                "zipCode": "99790",
+              },
+              "telephone": "907-949-4470",
+              "creditCard": {
+                "network": "Visa",
+                "number": "4532636730015542"
+              }
+            }
+          }
+        )
+    },
+      Do(
+        Create(
+          Class("orders"), {
+            data: {
+              "customer": Select("ref", Var("customer1")),
+              "line": [
+                {
+                  "product": Select("ref", Var("product1")),
+                  "quantity": 10,
+                  "price": Select(["data", "price"], Var("product1"))
+                },
+                {
+                  "product": Select("ref", Var("product2")),
+                  "quantity": 5,
+                  "price": Select(["data", "price"], Var("product2"))
+                },
+                {
+                  "product": Select("ref", Var("product3")),
+                  "quantity": 20,
+                  "price": Select(["data", "price"], Var("product3"))
+                }
+              ],
+              "status": "processing",
+              "creationDate": Time("now"),
+              "shipAddress": Select(["data", "address"], Var("customer1")),
+              "creditCard": Select(["data", "creditCard"], Var("customer1"))
+            }
+          }
+        ),
+        Create(
+          Class("orders"), {
+            data: {
+              "customer": Select("ref", Var("customer3")),
+              "line": [
+                {
+                  "product": Select("ref", Var("product1")),
+                  "quantity": 25,
+                  "price": Select(["data", "price"], Var("product1"))
+                },
+                {
+                  "product": Select("ref", Var("product3")),
+                  "quantity": 10,
+                  "price": Select(["data", "price"], Var("product3"))
+                }
+              ],
+              "status": "processing",
+              "creationDate": Time("now"),
+              "shipAddress": Select(["data", "address"], Var("customer3")),
+              "creditCard": Select(["data", "creditCard"], Var("customer3"))
+            }
+          }
+        ),
+        Create(
+          Class("orders"), {
+            data: {
+              "customer": Select("ref", Var("customer2")),
+              "line": [
+                {
+                  "product": Select("ref", Var("product3")),
+                  "quantity": 15,
+                  "price": Select(["data", "price"], Var("product3"))
+                },
+                {
+                  "product": Select("ref", Var("product2")),
+                  "quantity": 45,
+                  "price": Select(["data", "price"], Var("product2"))
+                }
+              ],
+              "status": "processing",
+              "creationDate": Time("now"),
+              "shipAddress": Select(["data", "address"], Var("customer2")),
+              "creditCard": Select(["data", "creditCard"], Var("customer2"))
+            }
+          }
+        )
+      )
+    )
+  )
+);

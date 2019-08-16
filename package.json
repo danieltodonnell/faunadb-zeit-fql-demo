@@ -1,0 +1,19 @@
+{
+  "name": "blog-demo",
+  "version": "1.0.0",
+  "description": "A demonstration of the magic that is Zeit and Fauna.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "zeit",
+    "fauna",
+    "demo"
+  ],
+  "author": "Dan O'Donnell",
+  "license": "ISC",
+  "dependencies": {
+    "faunadb": "^2.7.0"
+  }
+}
